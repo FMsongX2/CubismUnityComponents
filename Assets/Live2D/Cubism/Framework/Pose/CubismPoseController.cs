@@ -137,7 +137,7 @@ namespace Live2D.Cubism.Framework.Pose
                 // Fail silently...
                 if(appearPartsGroupIndex < 0)
                 {
-                    return;
+                    continue;
                 }
 
                 // Delay disappearing parts groups disappear.
