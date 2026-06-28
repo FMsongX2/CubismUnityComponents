@@ -914,6 +914,20 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         /// <param name="sender">Model with new render data.</param>
         /// <param name="data">New render data.</param>
+        private static int IndexOfDrawable(CubismRenderer[] renderers, int unmanagedIndex)
+        {
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i].Drawable.UnmanagedIndex == unmanagedIndex)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+
         private void OnDynamicDrawableData(CubismModel sender, CubismDynamicDrawableData[] data)
         {
             // Get drawables.
@@ -924,7 +938,9 @@ namespace Live2D.Cubism.Rendering
             // Handle render data changes.
             for (var dataIndex = 0; dataIndex < data.Length; ++dataIndex)
             {
-                var rendererIndex = Array.FindIndex(renderers, cubismRenderer => cubismRenderer.Drawable.UnmanagedIndex == dataIndex);
+                var rendererIndex = (dataIndex < renderers.Length && renderers[dataIndex].Drawable.UnmanagedIndex == dataIndex)
+                    ? dataIndex
+                    : IndexOfDrawable(renderers, dataIndex);
 
                 // Skip if no renderer found.
                 if (rendererIndex < 0) {
@@ -1018,7 +1034,9 @@ namespace Live2D.Cubism.Rendering
 
             for (var dataIndex = 0; dataIndex < data.Length; ++dataIndex)
             {
-                var rendererIndex = Array.FindIndex(renderers, cubismRenderer => cubismRenderer.Drawable.UnmanagedIndex == dataIndex);
+                var rendererIndex = (dataIndex < renderers.Length && renderers[dataIndex].Drawable.UnmanagedIndex == dataIndex)
+                    ? dataIndex
+                    : IndexOfDrawable(renderers, dataIndex);
 
                 // Skip if no renderer found.
                 if (rendererIndex < 0)
@@ -1041,7 +1059,9 @@ namespace Live2D.Cubism.Rendering
 
             for (var dataIndex = 0; dataIndex < data.Length; ++dataIndex)
             {
-                var rendererIndex = Array.FindIndex(renderers, cubismRenderer => cubismRenderer.Drawable.UnmanagedIndex == dataIndex);
+                var rendererIndex = (dataIndex < renderers.Length && renderers[dataIndex].Drawable.UnmanagedIndex == dataIndex)
+                    ? dataIndex
+                    : IndexOfDrawable(renderers, dataIndex);
 
                 // Skip if no renderer found.
                 if (rendererIndex < 0)
