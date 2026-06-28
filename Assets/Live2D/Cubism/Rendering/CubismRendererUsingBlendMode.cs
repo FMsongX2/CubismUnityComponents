@@ -285,10 +285,23 @@ namespace Live2D.Cubism.Rendering
 
             MeshRenderer.GetPropertyBlock(property);
 
-            // Write property.
-            property.SetTexture(CubismShaderVariables.RenderTexture, passData.CommonTemporaryTextureHandle);
+            WriteBlendedRenderTexture(property, passData);
 
             MeshRenderer.SetPropertyBlock(property);
+        }
+
+        /// <summary>
+        /// Writes the blended render texture into an already-fetched property block.
+        /// No-op when there is no current frame buffer (matches <see cref="ApplyBlendedRenderTexture"/>).
+        /// </summary>
+        private void WriteBlendedRenderTexture(MaterialPropertyBlock property, CubismRenderPassFeature.CubismRenderPass.PassData passData)
+        {
+            if (!RenderController?.CurrentFrameBuffer)
+            {
+                return;
+            }
+
+            property.SetTexture(CubismShaderVariables.RenderTexture, passData.CommonTemporaryTextureHandle);
         }
 
         /// <summary>
@@ -324,6 +337,17 @@ namespace Live2D.Cubism.Rendering
             var property = PropertyBlock;
             MeshRenderer.GetPropertyBlock(property);
 
+            WriteTransform(property);
+
+            MeshRenderer.SetPropertyBlock(property);
+        }
+
+        /// <summary>
+        /// Writes offset/scale, rotation and z-offset into an already-fetched property block.
+        /// Lets the draw path batch all writes into a single Get/SetPropertyBlock round-trip.
+        /// </summary>
+        private void WriteTransform(MaterialPropertyBlock property)
+        {
             // Set offset and scale from transform.
             var offsetScale = _offsetScale;
 
@@ -344,8 +368,6 @@ namespace Live2D.Cubism.Rendering
             _zOffset = RenderController.transform.localPosition.z + transform.localPosition.z;
             // Write property.
             property.SetFloat(CubismShaderVariables.ZOffset, _zOffset);
-
-            MeshRenderer.SetPropertyBlock(property);
         }
 
         /// <summary>
@@ -701,13 +723,21 @@ namespace Live2D.Cubism.Rendering
             // Mask rendering.
             DrawMasks(buffer, passData);
 
-            // Set property block.
-            ApplyMainTexture();
-            ApplyBlendedRenderTexture(passData);
-            ApplyScreenColor();
-            ApplyMultiplyColor();
+            // [PERF] Batch all MaterialPropertyBlock writes into a single Get/SetPropertyBlock
+            // round-trip instead of one Get+Set per Apply* call (was up to 5 round-trips per
+            // drawable per frame). DrawObject only routes drawables here, so the drawable-only
+            // writes are always valid.
+            var property = PropertyBlock;
+            MeshRenderer.GetPropertyBlock(property);
+            WriteMainTexture(property);
+            WriteBlendedRenderTexture(property, passData);
+            WriteScreenColor(property);
+            WriteMultiplyColor(property);
+            WriteTransform(property);
+            MeshRenderer.SetPropertyBlock(property);
+
+            // Vertex colors are uploaded to the mesh, not the property block.
             ApplyVertexColors();
-            ApplyTransform();
 
             // In the case of color blending before Cubism 5.2.
             if ((ColorBlendType == BlendTypes.ColorBlend.Normal

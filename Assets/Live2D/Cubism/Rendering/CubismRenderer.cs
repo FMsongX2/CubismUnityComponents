@@ -738,10 +738,18 @@ namespace Live2D.Cubism.Rendering
             var property = PropertyBlock;
             MeshRenderer.GetPropertyBlock(property);
 
-            // Write property.
-            property.SetTexture(CubismShaderVariables.MainTexture, MainTexture);
+            WriteMainTexture(property);
 
             MeshRenderer.SetPropertyBlock(property);
+        }
+
+        /// <summary>
+        /// Writes the main texture into an already-fetched property block.
+        /// Lets the draw path batch all writes into a single Get/SetPropertyBlock round-trip.
+        /// </summary>
+        private void WriteMainTexture(MaterialPropertyBlock property)
+        {
+            property.SetTexture(CubismShaderVariables.MainTexture, MainTexture);
         }
 
         /// <summary>
@@ -821,11 +829,18 @@ namespace Live2D.Cubism.Rendering
             var property = PropertyBlock;
             MeshRenderer.GetPropertyBlock(property);
 
-
-            // Write property.
-            property.SetColor(CubismShaderVariables.MultiplyColor, MultiplyColor);
+            WriteMultiplyColor(property);
 
             MeshRenderer.SetPropertyBlock(property);
+        }
+
+        /// <summary>
+        /// Writes the multiply color into an already-fetched property block.
+        /// Caller must ensure this is a drawable draw object.
+        /// </summary>
+        private void WriteMultiplyColor(MaterialPropertyBlock property)
+        {
+            property.SetColor(CubismShaderVariables.MultiplyColor, MultiplyColor);
         }
 
         /// <summary>
@@ -858,11 +873,18 @@ namespace Live2D.Cubism.Rendering
             var property = PropertyBlock;
             MeshRenderer.GetPropertyBlock(property);
 
-
-            // Write property.
-            property.SetColor(CubismShaderVariables.ScreenColor, ScreenColor);
+            WriteScreenColor(property);
 
             MeshRenderer.SetPropertyBlock(property);
+        }
+
+        /// <summary>
+        /// Writes the screen color into an already-fetched property block.
+        /// Caller must ensure this is a drawable draw object.
+        /// </summary>
+        private void WriteScreenColor(MaterialPropertyBlock property)
+        {
+            property.SetColor(CubismShaderVariables.ScreenColor, ScreenColor);
         }
 
         /// <summary>
