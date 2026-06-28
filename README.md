@@ -2,6 +2,15 @@
 
 ---
 
+> ### 📱 Mobile-tuned fork
+> A fork of **[Live2D/CubismUnityComponents](https://github.com/Live2D/CubismUnityComponents)**, optimized for mobile.
+> - **Correctness fixes** are submitted upstream as individual pull requests.
+> - **Performance optimizations** are applied here on the `mobile` branch — our working SDK.
+>
+> For official releases and documentation, see the upstream project.
+
+---
+
 # Cubism Unity Components
 
 Welcome to the open components of the Cubism SDK for Unity.
