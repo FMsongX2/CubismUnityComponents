@@ -135,7 +135,7 @@ namespace Live2D.Cubism.Framework.Json
                         endPos[0] = i + 1; // next word of "
                         if (stringBuffer != null)
                         {
-                            if (i - 1 > startPos) stringBuffer.Append(new string(str, startPos, i - 1 - startPos)); // regist till prev char
+                            if (i > startPos) stringBuffer.Append(new string(str, startPos, i - startPos)); // regist till prev char
                             return stringBuffer.ToString();
                         }
                         else
