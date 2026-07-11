@@ -549,6 +549,12 @@ namespace Live2D.Cubism.Rendering
         /// </remarks>
         public void SwapMeshes()
         {
+            // The batched fast path owns all mesh data; nothing to swap.
+            if (Meshes == null || Meshes.Length < 2)
+            {
+                return;
+            }
+
             // Perform internal swap.
             BackMesh = FrontMesh;
             FrontMesh = (FrontMesh == 0) ? 1 : 0;
@@ -718,6 +724,12 @@ namespace Live2D.Cubism.Rendering
         /// <param name="newModelOpacity">Opacity to set.</param>
         internal void OnModelOpacityDidChange(float newModelOpacity)
         {
+            // The batched fast path reads the controller opacity when recording draws.
+            if (IsBatchedRenderingTarget())
+            {
+                return;
+            }
+
             var property = PropertyBlock;
             _meshRenderer.GetPropertyBlock(property);
 
@@ -731,10 +743,42 @@ namespace Live2D.Cubism.Rendering
         #endregion
 
         /// <summary>
+        /// True when this renderer's drawing is owned by the batched fast path.
+        /// </summary>
+        private bool IsBatchedRenderingTarget()
+        {
+            return RenderController != null
+                && RenderController.IsBatchedRenderingActive
+                && DrawObjectType == CubismModelTypes.DrawObjectType.Drawable;
+        }
+
+        /// <summary>
+        /// Routes color changes into the batched renderer when it owns this drawable.
+        /// </summary>
+        private bool TryMarkBatchedColorDirty()
+        {
+            if (!IsBatchedRenderingTarget())
+            {
+                return false;
+            }
+
+            RenderController.BatchedRenderer?.MarkColorDirty(this);
+
+            return true;
+        }
+
+        /// <summary>
         /// Applies main texture for rendering.
         /// </summary>
         private void ApplyMainTexture()
         {
+            if (IsBatchedRenderingTarget())
+            {
+                RenderController.BatchedRenderer?.MarkTexturesDirty();
+
+                return;
+            }
+
             var property = PropertyBlock;
             MeshRenderer.GetPropertyBlock(property);
 
@@ -797,9 +841,18 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         public void ApplyVertexColors()
         {
-
+            if (TryMarkBatchedColorDirty())
+            {
+                return;
+            }
 
             var vertexColors = VertexColors;
+
+            if (vertexColors == null)
+            {
+                return;
+            }
+
             var color = Color;
 
 
@@ -822,6 +875,11 @@ namespace Live2D.Cubism.Rendering
         public void ApplyMultiplyColor()
         {
             if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+            {
+                return;
+            }
+
+            if (TryMarkBatchedColorDirty())
             {
                 return;
             }
@@ -866,6 +924,11 @@ namespace Live2D.Cubism.Rendering
         public void ApplyScreenColor()
         {
             if (DrawObjectType != CubismModelTypes.DrawObjectType.Drawable)
+            {
+                return;
+            }
+
+            if (TryMarkBatchedColorDirty())
             {
                 return;
             }
@@ -971,6 +1034,13 @@ namespace Live2D.Cubism.Rendering
             }
 #endif
 
+            // The batched fast path never renders through the MeshRenderer, so avoid
+            // instantiating a per-renderer material copy.
+            if (IsBatchedRenderingTarget())
+            {
+                return;
+            }
+
             if (!_meshRenderer.material)
             {
                 _meshRenderer.material = SetMaterialFromPicker();
@@ -1070,6 +1140,13 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void TryInitializeMesh()
         {
+            // The batched fast path draws from its own shared mesh; skip the
+            // per-drawable double-buffered meshes entirely.
+            if (IsBatchedRenderingTarget())
+            {
+                return;
+            }
+
             // Only create mesh if necessary.
             // HACK: 'Mesh != null' is individually implemented to avoid errors caused by the absence of a backing field.
             // HACK: 'Mesh.vertex > 0' makes sure mesh is recreated in case of runtime instantiation.

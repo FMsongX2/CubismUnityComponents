@@ -568,12 +568,192 @@ namespace Live2D.Cubism.Rendering.URP
             }
 
             /// <summary>
+            /// Reusable controller list for batched group drawing.
+            /// </summary>
+            private static readonly System.Collections.Generic.List<CubismRenderController> _batchedControllers = new System.Collections.Generic.List<CubismRenderController>(8);
+
+            /// <summary>
+            /// Camera state for <see cref="CompareBatchedControllers"/>.
+            /// </summary>
+            private static Vector3 _batchedSortCameraPosition;
+            private static Vector3 _batchedSortCameraForward;
+
+            /// <summary>
+            /// Cached comparison to avoid per-frame allocations.
+            /// </summary>
+            private static readonly Comparison<CubismRenderController> _batchedControllerComparison = CompareBatchedControllers;
+
+            /// <summary>
+            /// True when every registered render controller renders through the batched fast path.
+            /// </summary>
+            internal static bool AreAllControllersBatched(CubismRenderController[] renderControllers)
+            {
+                if (renderControllers == null || renderControllers.Length < 1)
+                {
+                    return false;
+                }
+
+                for (var i = 0; i < renderControllers.Length; i++)
+                {
+                    var controller = renderControllers[i];
+
+                    if (!controller)
+                    {
+                        continue;
+                    }
+
+                    if (!controller.IsBatchedRenderingActive
+                        || controller.BatchedRenderer == null
+                        || !controller.BatchedRenderer.IsValid)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            /// <summary>
+            /// Orders controllers back-to-front for batched drawing (sorting order first,
+            /// camera distance as tie break to mirror the legacy per-renderer sort).
+            /// </summary>
+            private static int CompareBatchedControllers(CubismRenderController a, CubismRenderController b)
+            {
+                if (!a || !b)
+                {
+                    return 0;
+                }
+
+                var result = a.SortingOrder.CompareTo(b.SortingOrder);
+
+                if (result != 0)
+                {
+                    return result;
+                }
+
+                var distanceA = Vector3.Dot(a.transform.position - _batchedSortCameraPosition, _batchedSortCameraForward);
+                var distanceB = Vector3.Dot(b.transform.position - _batchedSortCameraPosition, _batchedSortCameraForward);
+
+                // Larger distance draws first (back to front).
+                return distanceB.CompareTo(distanceA);
+            }
+
+            /// <summary>
+            /// Records mask atlas passes and main batch draws for one group of batched controllers.
+            /// </summary>
+            private static void DrawGroupBatched(CommandBuffer commandBuffer, PassData data, CubismRenderController[] controllers, bool drawToCameraTarget)
+            {
+                _batchedControllers.Clear();
+
+                for (var i = 0; i < controllers.Length; i++)
+                {
+                    var controller = controllers[i];
+
+                    if (!controller
+                        || !controller.enabled
+                        || !controller.gameObject.activeInHierarchy
+                        || controller.BatchedRenderer == null)
+                    {
+                        continue;
+                    }
+
+                    _batchedControllers.Add(controller);
+                }
+
+                if (_batchedControllers.Count < 1)
+                {
+                    return;
+                }
+
+                _batchedSortCameraPosition = data.CameraData.worldSpaceCameraPos;
+                _batchedSortCameraForward = data.CameraData.camera.transform.forward;
+
+                if (_batchedControllers.Count > 1)
+                {
+                    _batchedControllers.Sort(_batchedControllerComparison);
+                }
+
+                // Upload dirty mesh data and render all mask atlases first, so the main
+                // target is only bound once per group.
+                for (var i = 0; i < _batchedControllers.Count; i++)
+                {
+                    var batchedRenderer = _batchedControllers[i].BatchedRenderer;
+
+                    batchedRenderer.FlushMeshData();
+                    batchedRenderer.RecordMaskPass(commandBuffer);
+                }
+
+                if (drawToCameraTarget)
+                {
+                    commandBuffer.SetRenderTarget(data.CameraTextureHandle, data.CameraDepthTextureHandle);
+                }
+                else
+                {
+                    commandBuffer.SetRenderTarget(data.CommonRenderingTextureHandle, data.CameraDepthTextureHandle);
+                }
+
+                for (var i = 0; i < _batchedControllers.Count; i++)
+                {
+                    _batchedControllers[i].BatchedRenderer.RecordMainDraws(commandBuffer);
+                }
+            }
+
+            /// <summary>
+            /// Draws a sorted renderer group through the batched fast path when all its
+            /// controllers qualify.
+            /// </summary>
+            /// <returns>True when the group was handled.</returns>
+            private static bool TryDrawGroupBatched(CommandBuffer commandBuffer, PassData data, ref RendererGroupData rendererGroup)
+            {
+                var controllers = rendererGroup.RenderControllers;
+
+                if (controllers == null || !AreAllControllersBatched(controllers))
+                {
+                    return false;
+                }
+
+                DrawGroupBatched(commandBuffer, data, controllers, false);
+
+                // Mirror the legacy per-group composite to the camera target.
+                if (CubismRenderControllerGroup.GetInstance().IsCopiedToCameraTexture)
+                {
+                    _commandBuffer.SetRenderTarget(data.CameraTextureHandle, data.CameraDepthTextureHandle);
+
+                    _blitRenderTextureMaterial.SetTexture(CubismShaderVariables.MainTexture, data.CommonRenderingTextureHandle);
+
+                    var reversedZ = SystemInfo.usesReversedZBuffer ? GEqual : LEqual;
+                    _blitRenderTextureMaterial.SetInt(CubismShaderVariables.ReversedZ, reversedZ);
+
+                    _commandBuffer.DrawMesh(_blitRenderTextureMesh, Matrix4x4.identity, _blitRenderTextureMaterial);
+
+                    _commandBuffer.SetRenderTarget(data.CommonRenderingTextureHandle);
+                    _commandBuffer.ClearRenderTarget(true, true, Color.clear);
+                }
+
+                return true;
+            }
+
+            /// <summary>
             /// Draws the objects using the provided command buffer and pass data.
             /// </summary>
             /// <param name="commandBuffer">Command buffer to record draw commands.</param>
             /// <param name="data">Pass data containing render controllers and camera data.</param>
-            private static void DrawObjects(CommandBuffer commandBuffer, PassData data)
+            /// <param name="drawDirectlyToCameraTarget">True when every group renders batched straight into the camera target.</param>
+            private static void DrawObjects(CommandBuffer commandBuffer, PassData data, bool drawDirectlyToCameraTarget)
             {
+                // Fast path: no legacy models anywhere, no intermediate textures.
+                if (drawDirectlyToCameraTarget)
+                {
+                    var groups = data.RenderControllerGroupDaraArray;
+
+                    for (var groupIndex = 0; groupIndex < groups?.Length; groupIndex++)
+                    {
+                        DrawGroupBatched(commandBuffer, data, groups[groupIndex].Controllers, true);
+                    }
+
+                    return;
+                }
+
                 // Clear offscreen render textures at the beginning of the draw call.
                 CubismOffscreenRenderTextureManager.GetInstance().ClearRenderTextures(_commandBuffer);
 
@@ -585,6 +765,12 @@ namespace Live2D.Cubism.Rendering.URP
                     var rendererGroup = _sortedRendererGroupDataArray[groupIndex];
 
                     if (rendererGroup.Renderers == null)
+                    {
+                        continue;
+                    }
+
+                    // Batched fast path for groups whose models all qualify.
+                    if (TryDrawGroupBatched(commandBuffer, data, ref _sortedRendererGroupDataArray[groupIndex]))
                     {
                         continue;
                     }
@@ -729,6 +915,18 @@ namespace Live2D.Cubism.Rendering.URP
                     _blitRenderTextureMaterial = new Material(CubismBuiltinMaterials.UnlitBlit);
                 }
 
+                // When every model renders through the batched fast path, draw straight
+                // into the camera target: no intermediate texture, no clears, no blit.
+                var drawDirectlyToCameraTarget = CubismBatchedRendering.DrawToCameraTargetDirectly
+                    && AreAllControllersBatched(data.RenderControllers);
+
+                if (drawDirectlyToCameraTarget)
+                {
+                    DrawObjects(_commandBuffer, data, true);
+
+                    return;
+                }
+
 #if UNITY_EDITOR
                 // HACK: In the editor, Scene view camera may not have the latest texture data.
                 if (data.CameraData.isSceneViewCamera)
@@ -745,7 +943,7 @@ namespace Live2D.Cubism.Rendering.URP
                 _commandBuffer.ClearRenderTarget(false, true, Color.clear);
 
                 // Draw the objects.
-                DrawObjects(_commandBuffer, data);
+                DrawObjects(_commandBuffer, data, false);
 
                 // Blit the result back to the camera texture.
                 if (!CubismRenderControllerGroup.GetInstance().IsCopiedToCameraTexture)
@@ -803,22 +1001,31 @@ namespace Live2D.Cubism.Rendering.URP
                     passData.CameraData = cameraData;
                     passData.ResourceData = resourceData;
 
-                    var descriptor = resourceData.activeColorTexture.GetDescriptor(renderGraph);
-                    descriptor.wrapMode = TextureWrapMode.Repeat;
-                    descriptor.filterMode = FilterMode.Point;
+                    // When every model renders through the batched fast path directly to
+                    // the camera target, the intermediate full-screen textures are never
+                    // touched; skip allocating them entirely.
+                    var drawDirectlyToCameraTarget = CubismBatchedRendering.DrawToCameraTargetDirectly
+                        && AreAllControllersBatched(renderControllers);
 
-                    descriptor.name = "CommonTexture";
-                    passData.CommonRenderingTextureHandle = renderGraph.CreateTexture(descriptor);
-                    builder.UseTexture(passData.CommonRenderingTextureHandle, AccessFlags.ReadWrite);
+                    if (!drawDirectlyToCameraTarget)
+                    {
+                        var descriptor = resourceData.activeColorTexture.GetDescriptor(renderGraph);
+                        descriptor.wrapMode = TextureWrapMode.Repeat;
+                        descriptor.filterMode = FilterMode.Point;
 
-                    descriptor.name = "TempTexture";
-                    passData.CommonTemporaryTextureHandle = renderGraph.CreateTexture(descriptor);
-                    builder.UseTexture(passData.CommonTemporaryTextureHandle, AccessFlags.ReadWrite);
+                        descriptor.name = "CommonTexture";
+                        passData.CommonRenderingTextureHandle = renderGraph.CreateTexture(descriptor);
+                        builder.UseTexture(passData.CommonRenderingTextureHandle, AccessFlags.ReadWrite);
 
-                    descriptor.name = "MaskTexture";
-                    var maskTextureHandle = renderGraph.CreateTexture(descriptor);
-                    builder.UseTexture(maskTextureHandle, AccessFlags.ReadWrite);
-                    passData.MaskTextureHandle = maskTextureHandle;
+                        descriptor.name = "TempTexture";
+                        passData.CommonTemporaryTextureHandle = renderGraph.CreateTexture(descriptor);
+                        builder.UseTexture(passData.CommonTemporaryTextureHandle, AccessFlags.ReadWrite);
+
+                        descriptor.name = "MaskTexture";
+                        var maskTextureHandle = renderGraph.CreateTexture(descriptor);
+                        builder.UseTexture(maskTextureHandle, AccessFlags.ReadWrite);
+                        passData.MaskTextureHandle = maskTextureHandle;
+                    }
 
                     // This sets the render target of the pass to the active color texture. Change it to your own render target as needed.
                     passData.CameraTextureHandle = resourceData.activeColorTexture;

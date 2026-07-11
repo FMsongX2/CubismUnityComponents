@@ -626,7 +626,9 @@ namespace Live2D.Cubism.Rendering
 
 
             // Apply opacity.
-            var applyOpacityToRenderers = (OpacityHandlerInterface == null || Opacity > (1f - Mathf.Epsilon));
+            // The batched path reads the controller opacity directly when recording draws.
+            var applyOpacityToRenderers = !IsBatchedRenderingActive
+                && (OpacityHandlerInterface == null || Opacity > (1f - Mathf.Epsilon));
 
 
             if (applyOpacityToRenderers && Renderers != null)
@@ -843,12 +845,32 @@ namespace Live2D.Cubism.Rendering
 
             CurrentOffscreenUnmanagedIndex = -1;
 
+            // Decide on the batched fast path before renderers initialize so they
+            // can skip creating their per-drawable meshes.
+            Model.Revive();
+            TryActivateBatchedRendering();
+
             // Make sure renderers are available.
             if (!IsInitialized)
             {
-                Model.Revive();
                 TryInitialize();
             }
+            else if (!IsBatchedRenderingActive)
+            {
+                // Re-enabled with the fast path now unavailable: renderers that
+                // skipped their meshes in a previous batched session need them back.
+                var renderers = Renderers;
+
+                for (var i = 0; i < renderers.Length; i++)
+                {
+                    if (renderers[i] != null && renderers[i].Mesh == null)
+                    {
+                        renderers[i].TryInitialize(this);
+                    }
+                }
+            }
+
+            TryInitializeBatchedRenderer();
 
 
             // Register listener.
@@ -881,6 +903,10 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void OnDisable()
         {
+            // Release batched fast path resources first; native buffers must be freed
+            // even when the model is already gone.
+            DisposeBatchedRenderer();
+
             // Fail silently.
             if (!Model)
             {
@@ -930,6 +956,12 @@ namespace Live2D.Cubism.Rendering
 
         private void OnDynamicDrawableData(CubismModel sender, CubismDynamicDrawableData[] data)
         {
+            // Batched fast path replaces all per-renderer mesh bookkeeping.
+            if (TryConsumeDynamicDataBatched(sender, data))
+            {
+                return;
+            }
+
             // Get drawables.
             var drawables = sender.Drawables;
             var renderers = DrawableRenderers;
