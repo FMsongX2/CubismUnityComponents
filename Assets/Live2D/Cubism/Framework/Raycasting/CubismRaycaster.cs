@@ -25,6 +25,14 @@ namespace Live2D.Cubism.Framework.Raycasting
         private CubismRenderer[] Raycastables { get; set; }
 
         /// <summary>
+        /// <see cref="CubismDrawable"/>s belonging to <see cref="Raycastables"/>.
+        /// Geometry is read from the drawables (core data) instead of the renderer
+        /// meshes so raycasting works with the batched fast path, which creates no
+        /// per-drawable meshes.
+        /// </summary>
+        private CubismDrawable[] RaycastableDrawables { get; set; }
+
+        /// <summary>
         /// <see cref="CubismRaycastablePrecision"/>s with <see cref="CubismRaycastable"/>s attached.
         /// </summary>
         private CubismRaycastablePrecision[] RaycastablePrecisions { get; set; }
@@ -42,6 +50,7 @@ namespace Live2D.Cubism.Framework.Raycasting
 
             // Find raycastable drawables.
             var raycastables = new List<CubismRenderer>();
+            var raycastableDrawables = new List<CubismDrawable>();
             var raycastablePrecisions = new List<CubismRaycastablePrecision>();
 
 
@@ -57,12 +66,14 @@ namespace Live2D.Cubism.Framework.Raycasting
 
 
                 raycastables.Add(candidates[i].GetComponent<CubismRenderer>());
+                raycastableDrawables.Add(candidates[i]);
                 raycastablePrecisions.Add(candidates[i].GetComponent<CubismRaycastable>().Precision);
             }
 
 
             // Cache raycastables.
             Raycastables = raycastables.ToArray();
+            RaycastableDrawables = raycastableDrawables.ToArray();
             RaycastablePrecisions = raycastablePrecisions.ToArray();
         }
 
@@ -122,11 +133,11 @@ namespace Live2D.Cubism.Framework.Raycasting
                     continue;
                 }
 
-                if (RaycastDrawable(origin, ray.direction.normalized, maximumDistance, precision, raycastable, out var hitPosition, out var hitNormal, out var hitTime))
+                if (RaycastDrawable(origin, ray.direction.normalized, maximumDistance, precision, RaycastableDrawables[i], out var hitPosition, out var hitNormal, out var hitTime))
                 {
                     CubismRaycastHit raycastHit;
 
-                    raycastHit.Drawable = raycastable.GetComponent<CubismDrawable>();
+                    raycastHit.Drawable = RaycastableDrawables[i];
                     raycastHit.Distance = hitTime * maximumDistance;
                     raycastHit.WorldPosition = hitPosition;
                     raycastHit.LocalPosition = transform.InverseTransformPoint(hitPosition);
@@ -153,23 +164,46 @@ namespace Live2D.Cubism.Framework.Raycasting
         /// <param name="normalizedDirection">The direction vector of the ray.</param>
         /// <param name="length">The max length of the ray from the origin.</param>
         /// <param name="precision">The precision of the raycast.</param>
-        /// <param name="renderer">The renderer to perform the raycast.</param>
+        /// <param name="drawable">The drawable to perform the raycast against.</param>
         /// <param name="hitPosition">The hit position of the ray.</param>
         /// <param name="hitNormal">The hit normal of the ray.</param>
         /// <param name="hitTime">The [0, 1] parameter of the ray where the hit point is between `Origin` and `Origin + Direction`.</param>
         /// <returns>Did the Intersection Occur.</returns>
-        private bool RaycastDrawable(Vector3 origin, Vector3 normalizedDirection, float length, CubismRaycastablePrecision precision, CubismRenderer renderer, out Vector3 hitPosition, out Vector3 hitNormal, out float hitTime)
+        private bool RaycastDrawable(Vector3 origin, Vector3 normalizedDirection, float length, CubismRaycastablePrecision precision, CubismDrawable drawable, out Vector3 hitPosition, out Vector3 hitNormal, out float hitTime)
         {
-            var bounds = renderer.Mesh.bounds;
+            // Geometry comes from the core-backed drawable data, which is valid for
+            // both the legacy per-drawable meshes and the batched fast path.
+            var vertices = drawable.VertexPositions;
+
+            if (vertices == null || vertices.Length < 1)
+            {
+                hitPosition = Vector3.zero;
+                hitNormal = Vector3.zero;
+                hitTime = 0.0f;
+
+                return false;
+            }
+
+            var min = vertices[0];
+            var max = vertices[0];
+
+            for (var i = 1; i < vertices.Length; i++)
+            {
+                min = Vector3.Min(min, vertices[i]);
+                max = Vector3.Max(max, vertices[i]);
+            }
+
+            var bounds = new Bounds((min + max) * 0.5f, max - min);
+
             // Transform the ray into the coordinate system of the bounds to account for bounds rotation.
-            var start = renderer.transform.InverseTransformPoint(origin);
-            var end = renderer.transform.InverseTransformPoint(origin + normalizedDirection * length);
+            var start = drawable.transform.InverseTransformPoint(origin);
+            var end = drawable.transform.InverseTransformPoint(origin + normalizedDirection * length);
             if (!LineExtentBoxIntersection(bounds, start, end, Vector3.zero, out hitPosition, out hitNormal, out hitTime))
             {
                 return false;
             }
             // Convert the hit location back to the global coordinate system.
-            hitPosition = renderer.transform.TransformPoint(hitPosition);
+            hitPosition = drawable.transform.TransformPoint(hitPosition);
 
             switch (precision)
             {
@@ -180,12 +214,12 @@ namespace Live2D.Cubism.Framework.Raycasting
                     }
                 case CubismRaycastablePrecision.Triangles:
                     {
-                        var indices = renderer.Mesh.triangles;
-                        var positions = new Vector3[renderer.Mesh.vertices.Length];
+                        var indices = drawable.Indices;
+                        var positions = new Vector3[vertices.Length];
 
-                        for (var i = 0; i < renderer.Mesh.vertices.Length; i++)
+                        for (var i = 0; i < vertices.Length; i++)
                         {
-                            positions[i] = renderer.transform.TransformPoint(renderer.Mesh.vertices[i]);
+                            positions[i] = drawable.transform.TransformPoint(vertices[i]);
                         }
 
                         if (!RayIntersectMesh(origin, normalizedDirection, length, positions, indices, out hitPosition, out hitTime))
