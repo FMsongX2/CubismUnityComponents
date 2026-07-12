@@ -826,7 +826,17 @@ namespace Live2D.Cubism.Rendering
                     name = _controller.Model.name + " TextureArray",
                     filterMode = first.filterMode,
                     wrapMode = first.wrapMode,
-                    anisoLevel = first.anisoLevel
+                    anisoLevel = first.anisoLevel,
+                    // Root cause of the gray-avatar-on-scene-transition bug: the shader
+                    // reads _MainTexArray through a keyword-gated HLSL declaration, not a
+                    // Properties-block entry, so Resources.UnloadUnusedAssets (auto-run on
+                    // every non-additive scene load) does not see the material->array
+                    // reference and releases this runtime array. Its material binding then
+                    // reads null and the model renders as a flat gray silhouette; unlike an
+                    // imported texture the array has no disk backing to reload from. The
+                    // DontUnloadUnusedAsset flag (part of HideAndDontSave, matching the
+                    // batched materials) keeps it resident.
+                    hideFlags = HideFlags.HideAndDontSave
                 };
 
                 if (array.mipmapCount != first.mipmapCount)
@@ -873,8 +883,17 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void RefreshTextureArrayContent()
         {
-            if (!_useTextureArray || _textureArray == null || _textures == null)
+            if (!_useTextureArray || _textures == null)
             {
+                return;
+            }
+
+            // The array object itself was released (context loss, or a stray unload
+            // before the hideFlags guard took effect): rebuild the whole texture
+            // state — array plus the materials bound to it — on the next flush.
+            if (_textureArray == null)
+            {
+                _texturesDirty = true;
                 return;
             }
 
@@ -895,6 +914,17 @@ namespace Live2D.Cubism.Rendering
                 // Source shape changed unexpectedly; force a full texture rebuild.
                 Debug.LogWarning($"[CubismBatchedModelRenderer] Texture array refresh failed, rebuilding: {e.Message}");
                 _texturesDirty = true;
+                return;
+            }
+
+            // Re-assert the binding: a cached material may still point at a replaced
+            // (now destroyed) array, which the shader samples as flat gray.
+            foreach (var material in _materials.Values)
+            {
+                if (material != null && material.IsKeywordEnabled("CUBISM_TEXTURE_ARRAY"))
+                {
+                    material.SetTexture(MainTextureArrayId, _textureArray);
+                }
             }
         }
 
@@ -924,6 +954,17 @@ namespace Live2D.Cubism.Rendering
 
             if (_materials.TryGetValue(key, out var material) && material != null)
             {
+                // Re-assert the array binding every time the cached material is served
+                // for drawing. The proven cause of the gray-avatar bug is this binding
+                // reading null at draw time while the array object is alive; the shader
+                // then samples an unbound array and the model renders flat gray. Setting
+                // it here (a cheap reference assign) guarantees a valid binding at the
+                // draw regardless of what cleared it between frames.
+                if (_useTextureArray && _textureArray != null)
+                {
+                    material.SetTexture(MainTextureArrayId, _textureArray);
+                }
+
                 return material;
             }
 
