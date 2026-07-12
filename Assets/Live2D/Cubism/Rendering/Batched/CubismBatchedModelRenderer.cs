@@ -759,7 +759,7 @@ namespace Live2D.Cubism.Rendering
             _textures = distinct.ToArray();
             _useTextureArray = false;
 
-            if (CubismBatchedRendering.UseTextureArray && _textures.Length > 1)
+            if (CubismBatchedRendering.TextureArrayAllowed && _textures.Length > 1)
             {
                 TryBuildTextureArray();
             }

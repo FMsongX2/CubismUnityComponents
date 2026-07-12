@@ -35,8 +35,31 @@ namespace Live2D.Cubism.Rendering
         /// <summary>
         /// When true, models whose textures share size/format/mips get a runtime
         /// <see cref="Texture2DArray"/> so texture switches stop splitting batches.
+        /// The array duplicates the source textures in memory, so it is skipped on
+        /// devices below <see cref="TextureArrayMinimumSystemMemoryMegabytes"/>;
+        /// per-texture batching still applies there.
         /// </summary>
         public static bool UseTextureArray = true;
+
+        /// <summary>
+        /// Minimum <see cref="SystemInfo.systemMemorySize"/> (MB) for the runtime
+        /// texture array. Below this, batching splits per texture instead of
+        /// spending an extra texture-set worth of memory. 0 disables the check.
+        /// </summary>
+        public static int TextureArrayMinimumSystemMemoryMegabytes = 4096;
+
+        /// <summary>
+        /// Effective texture-array switch after device constraints.
+        /// </summary>
+        internal static bool TextureArrayAllowed
+        {
+            get
+            {
+                return UseTextureArray
+                       && (TextureArrayMinimumSystemMemoryMegabytes <= 0
+                           || SystemInfo.systemMemorySize >= TextureArrayMinimumSystemMemoryMegabytes);
+            }
+        }
 
         /// <summary>
         /// Mesh update flags used for all batched mesh uploads.
