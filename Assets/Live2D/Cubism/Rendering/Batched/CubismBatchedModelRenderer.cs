@@ -960,10 +960,20 @@ namespace Live2D.Cubism.Rendering
 
                 if (fullRefresh || drawableData.IsVisibilityDirty)
                 {
-                    if (_visible[i] != drawableData.IsVisible)
+                    var isVisible = drawableData.IsVisible;
+
+                    if (_visible[i] != isVisible)
                     {
-                        _visible[i] = drawableData.IsVisible;
+                        _visible[i] = isVisible;
                         visibilityDirty = true;
+                    }
+
+                    // Keep the (mesh-less) MeshRenderer's enabled flag in sync;
+                    // raycasting and user code use it as the visibility signal.
+                    var renderer = _renderersByDrawable[i];
+                    if (renderer != null && renderer.MeshRenderer.enabled != isVisible)
+                    {
+                        renderer.MeshRenderer.enabled = isVisible;
                     }
                 }
 
