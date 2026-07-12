@@ -169,6 +169,18 @@ namespace Live2D.Cubism.Rendering
         private bool _stream1Dirty;
         private bool _indicesDirty;
         private bool _texturesDirty;
+
+        /// <summary>
+        /// True while the texture-array snapshot waits for async texture uploads
+        /// to settle; the model batches per texture in the meantime.
+        /// </summary>
+        private bool _textureArrayPending;
+
+        /// <summary>
+        /// Earliest <see cref="Time.realtimeSinceStartup"/> at which the source
+        /// textures may be snapshotted into the texture array.
+        /// </summary>
+        private float _textureArrayActivationTime;
         private bool _receivedFirstData;
         private int _lastFlushedFrame = -1;
         private int _lastMaskUpdateFrame = -1;
@@ -402,7 +414,10 @@ namespace Live2D.Cubism.Rendering
             // Mask groups.
             BuildMaskGroups(drawables);
 
-            // Texture table + materials (also fills _textureSlot).
+            // Texture table + materials (also fills _textureSlot). The texture-array
+            // snapshot is deferred so pending async texture uploads can land first.
+            _textureArrayActivationTime = Time.realtimeSinceStartup
+                + CubismBatchedRendering.TextureArrayActivationDelaySeconds;
             BuildTextures();
 
             // Vertex/index storage.
@@ -758,10 +773,21 @@ namespace Live2D.Cubism.Rendering
 
             _textures = distinct.ToArray();
             _useTextureArray = false;
+            _textureArrayPending = false;
 
             if (CubismBatchedRendering.TextureArrayAllowed && _textures.Length > 1)
             {
-                TryBuildTextureArray();
+                if (Time.realtimeSinceStartup >= _textureArrayActivationTime)
+                {
+                    TryBuildTextureArray();
+                }
+                else
+                {
+                    // Sources may still be mid async-upload; copying now would freeze
+                    // placeholder content into the array. Batch per texture until the
+                    // settle window passes (FlushMeshData retries).
+                    _textureArrayPending = true;
+                }
             }
         }
 
@@ -1153,6 +1179,10 @@ namespace Live2D.Cubism.Rendering
         public void MarkTexturesDirty()
         {
             _texturesDirty = true;
+
+            // New texture content may upload asynchronously; re-arm the settle window.
+            _textureArrayActivationTime = Time.realtimeSinceStartup
+                + CubismBatchedRendering.TextureArrayActivationDelaySeconds;
         }
 
         #endregion
@@ -1168,6 +1198,14 @@ namespace Live2D.Cubism.Rendering
             if (!IsValid)
             {
                 return;
+            }
+
+            if (_textureArrayPending && Time.realtimeSinceStartup >= _textureArrayActivationTime)
+            {
+                // Upload settle window passed: rebuild through the regular texture
+                // flow, which re-bakes uv slices and batch keys for the array.
+                _textureArrayPending = false;
+                _texturesDirty = true;
             }
 
             if (_lastFlushedFrame == Time.frameCount && !_texturesDirty)

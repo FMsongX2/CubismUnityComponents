@@ -26,11 +26,14 @@ namespace Live2D.Cubism.Rendering
         /// <summary>
         /// When true and every render controller group is batched, models draw straight
         /// into the camera target, skipping the intermediate full-screen texture, its
-        /// clears, and the final blit. Additive/multiplicative drawables then blend
-        /// against the scene behind the model (identical to the pre-5.2 renderer)
-        /// instead of against a transparent buffer.
+        /// clears, and the final blit (~0.4ms GPU on a 2024 flagship). Additive and
+        /// multiplicative drawables then blend against the scene behind the model
+        /// (identical to the pre-5.2 renderer) instead of against a transparent buffer.
+        /// Off by default: the buffered composition keeps the exact legacy blend
+        /// semantics for any model content and renders through the same offscreen
+        /// texture + blit sequence the stock pipeline has always used.
         /// </summary>
-        public static bool DrawToCameraTargetDirectly = true;
+        public static bool DrawToCameraTargetDirectly = false;
 
         /// <summary>
         /// When true, models whose textures share size/format/mips get a runtime
@@ -47,6 +50,17 @@ namespace Live2D.Cubism.Rendering
         /// spending an extra texture-set worth of memory. 0 disables the check.
         /// </summary>
         public static int TextureArrayMinimumSystemMemoryMegabytes = 4096;
+
+        /// <summary>
+        /// Seconds to wait after a model (re)build before snapshotting the source
+        /// textures into the runtime <see cref="Texture2DArray"/>. Textures still in
+        /// the async GPU upload queue (scene load, app cold start) can hold
+        /// placeholder content; a per-texture binding follows the upload
+        /// transparently, but the array copy would freeze that placeholder
+        /// permanently. Until the window passes the model batches per texture
+        /// (visually identical). 0 copies immediately.
+        /// </summary>
+        public static float TextureArrayActivationDelaySeconds = 3.0f;
 
         /// <summary>
         /// Effective texture-array switch after device constraints.

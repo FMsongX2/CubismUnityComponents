@@ -188,6 +188,18 @@ namespace Live2D.Cubism.Rendering.URP
                 /// Texture handle for temporary rendering operations.
                 /// </summary>
                 public TextureHandle CommonTemporaryTextureHandle;
+
+                /// <summary>
+                /// Record-time decision: every registered controller renders batched.
+                /// Reused at execute time so the pass never routes a model down a
+                /// path whose textures were not allocated for this frame.
+                /// </summary>
+                public bool AllControllersBatched;
+
+                /// <summary>
+                /// Record-time decision: draw straight into the camera target.
+                /// </summary>
+                public bool DrawDirectlyToCameraTarget;
             }
 
             /// <summary>
@@ -707,7 +719,11 @@ namespace Live2D.Cubism.Rendering.URP
             {
                 var controllers = rendererGroup.RenderControllers;
 
-                if (controllers == null || !AreAllControllersBatched(controllers))
+                // When the record-time check already proved every controller batched,
+                // skip the per-group re-check: the legacy fallback would reference
+                // full-screen textures that were never allocated for this frame.
+                if (controllers == null
+                    || (!data.AllControllersBatched && !AreAllControllersBatched(controllers)))
                 {
                     return false;
                 }
@@ -917,10 +933,9 @@ namespace Live2D.Cubism.Rendering.URP
 
                 // When every model renders through the batched fast path, draw straight
                 // into the camera target: no intermediate texture, no clears, no blit.
-                var drawDirectlyToCameraTarget = CubismBatchedRendering.DrawToCameraTargetDirectly
-                    && AreAllControllersBatched(data.RenderControllers);
-
-                if (drawDirectlyToCameraTarget)
+                // Uses the record-time decision so the executed path always matches the
+                // textures allocated for this frame.
+                if (data.DrawDirectlyToCameraTarget)
                 {
                     DrawObjects(_commandBuffer, data, true);
 
@@ -1001,12 +1016,17 @@ namespace Live2D.Cubism.Rendering.URP
                     passData.CameraData = cameraData;
                     passData.ResourceData = resourceData;
 
-                    // When every model renders through the batched fast path directly to
-                    // the camera target, the intermediate full-screen textures are never
-                    // touched; skip allocating them entirely.
+                    // Record-time path decisions, stored on the pass data so execution
+                    // always matches the textures allocated here.
+                    var allControllersBatched = AreAllControllersBatched(renderControllers);
                     var drawDirectlyToCameraTarget = CubismBatchedRendering.DrawToCameraTargetDirectly
-                        && AreAllControllersBatched(renderControllers);
+                        && allControllersBatched;
 
+                    passData.AllControllersBatched = allControllersBatched;
+                    passData.DrawDirectlyToCameraTarget = drawDirectlyToCameraTarget;
+
+                    // The composite target is only needed when models draw into it
+                    // instead of straight into the camera target.
                     if (!drawDirectlyToCameraTarget)
                     {
                         var descriptor = resourceData.activeColorTexture.GetDescriptor(renderGraph);
@@ -1016,6 +1036,16 @@ namespace Live2D.Cubism.Rendering.URP
                         descriptor.name = "CommonTexture";
                         passData.CommonRenderingTextureHandle = renderGraph.CreateTexture(descriptor);
                         builder.UseTexture(passData.CommonRenderingTextureHandle, AccessFlags.ReadWrite);
+                    }
+
+                    // Only legacy-path models touch the temporary/mask full-screen
+                    // textures (high-precision masking, blend compositing); batched
+                    // models clip through their own mask atlas instead.
+                    if (!allControllersBatched)
+                    {
+                        var descriptor = resourceData.activeColorTexture.GetDescriptor(renderGraph);
+                        descriptor.wrapMode = TextureWrapMode.Repeat;
+                        descriptor.filterMode = FilterMode.Point;
 
                         descriptor.name = "TempTexture";
                         passData.CommonTemporaryTextureHandle = renderGraph.CreateTexture(descriptor);
