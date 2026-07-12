@@ -100,6 +100,25 @@ namespace Live2D.Cubism.Rendering
 
 
         /// <summary>
+        /// Called by Unity. Regaining focus can follow a graphics-context loss that
+        /// discards GPU-only resources; the batched texture array has no CPU backing,
+        /// so refresh it or the avatar returns as a flat gray silhouette. Scene
+        /// transitions are already covered by the resume path; this handles the
+        /// background/foreground case that has no transition.
+        /// </summary>
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            if (hasFocus
+                && IsBatchedRenderingActive
+                && BatchedRenderer != null
+                && !_isBatchedRendererSuspended)
+            {
+                BatchedRenderer.RefreshVolatileGpuResources();
+            }
+        }
+
+
+        /// <summary>
         /// Creates the batched renderer once renderers are initialized.
         /// </summary>
         private void TryInitializeBatchedRenderer()

@@ -858,6 +858,63 @@ namespace Live2D.Cubism.Rendering
         }
 
 
+        /// <summary>
+        /// Re-copies the source textures into the existing texture array. A runtime
+        /// <see cref="Texture2DArray"/> filled by <see cref="Graphics.CopyTexture"/>
+        /// has no CPU-side backing, so if the GPU discards its contents — memory
+        /// pressure during a scene transition, graphics-context loss on app focus
+        /// change — it reads back as flat gray with no source to restore it (the
+        /// avatar renders as a shapeless silhouette). Per-texture batching and the
+        /// legacy path bind Unity-managed textures instead and never hit this.
+        /// Refreshing on resume, the point every show-transition passes through,
+        /// repopulates the array from the still-resident sources. GPU-to-GPU and
+        /// off the per-frame path, so it runs unconditionally rather than trying to
+        /// detect the loss.
+        /// </summary>
+        private void RefreshTextureArrayContent()
+        {
+            if (!_useTextureArray || _textureArray == null || _textures == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var slices = Mathf.Min(_textures.Length, _textureArray.depth);
+
+                for (var i = 0; i < slices; i++)
+                {
+                    if (_textures[i] != null)
+                    {
+                        Graphics.CopyTexture(_textures[i], 0, _textureArray, i);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                // Source shape changed unexpectedly; force a full texture rebuild.
+                Debug.LogWarning($"[CubismBatchedModelRenderer] Texture array refresh failed, rebuilding: {e.Message}");
+                _texturesDirty = true;
+            }
+        }
+
+
+        /// <summary>
+        /// Re-populates GPU-only resources after a suspected graphics-context loss
+        /// (e.g. app focus regained on mobile). Safe to call any time; a no-op
+        /// unless a runtime texture array is in use.
+        /// </summary>
+        public void RefreshVolatileGpuResources()
+        {
+            if (!IsValid)
+            {
+                return;
+            }
+
+            RefreshTextureArrayContent();
+        }
+
+
         private Material GetBatchMaterial(int textureSlot, BlendTypes.ColorBlend colorBlend, bool isDoubleSided)
         {
             var key = ((long)(_useTextureArray ? 0 : textureSlot) << 8)
@@ -1571,6 +1628,10 @@ namespace Live2D.Cubism.Rendering
             _indicesDirty = true;
             _lastFlushedFrame = -1;
             _lastMaskUpdateFrame = -1;
+
+            // The texture array is a detached GPU copy Unity cannot restore on its
+            // own; repopulate it in case its contents were discarded while hidden.
+            RefreshTextureArrayContent();
 
             return true;
         }
