@@ -903,9 +903,9 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void OnDisable()
         {
-            // Release batched fast path resources first; native buffers must be freed
-            // even when the model is already gone.
-            DisposeBatchedRenderer();
+            // Batched resources stay alive across disable/enable cycles (avatar
+            // power management toggles this component); OnDestroy releases them.
+            SuspendBatchedRenderer();
 
             // Fail silently.
             if (!Model)

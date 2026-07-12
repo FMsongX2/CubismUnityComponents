@@ -35,6 +35,12 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         internal CubismBatchedModelRenderer BatchedRenderer { get; private set; }
 
+        /// <summary>
+        /// True between a disable and the next enable while batched resources are
+        /// kept alive; gates the one-shot state refresh on resume.
+        /// </summary>
+        private bool _isBatchedRendererSuspended;
+
 
         /// <summary>
         /// Decides whether the batched fast path applies to this model. Must run
@@ -70,13 +76,65 @@ namespace Live2D.Cubism.Rendering
 
 
         /// <summary>
+        /// Called on disable. Keeps the batched renderer (and its GPU/native
+        /// resources) alive so avatar power-management patterns that toggle the
+        /// controller's enabled flag resume without a rebuild stutter; only
+        /// <see cref="OnDestroy"/> releases the resources.
+        /// </summary>
+        private void SuspendBatchedRenderer()
+        {
+            if (BatchedRenderer != null)
+            {
+                _isBatchedRendererSuspended = true;
+            }
+        }
+
+
+        /// <summary>
+        /// Called by Unity. Releases suspended batched resources.
+        /// </summary>
+        private void OnDestroy()
+        {
+            DisposeBatchedRenderer();
+        }
+
+
+        /// <summary>
         /// Creates the batched renderer once renderers are initialized.
         /// </summary>
         private void TryInitializeBatchedRenderer()
         {
-            if (!IsBatchedRenderingActive || BatchedRenderer != null)
+            if (!IsBatchedRenderingActive)
             {
+                // Fell back (or was disabled globally) while a suspended batched
+                // renderer still holds resources: release it; the legacy meshes are
+                // healed by OnEnable.
+                if (BatchedRenderer != null)
+                {
+                    DisposeBatchedRenderer();
+                }
+
                 return;
+            }
+
+            if (BatchedRenderer != null)
+            {
+                if (!_isBatchedRendererSuspended)
+                {
+                    return;
+                }
+
+                // Re-enabled with live resources: refresh state instead of rebuilding.
+                _isBatchedRendererSuspended = false;
+
+                if (BatchedRenderer.ResumeAfterDisable())
+                {
+                    return;
+                }
+
+                // The model changed shape while suspended — rebuild from scratch.
+                BatchedRenderer.Dispose();
+                BatchedRenderer = null;
             }
 
             if (CubismBatchedModelRenderer.AreRenderersEligible(this))
@@ -106,6 +164,8 @@ namespace Live2D.Cubism.Rendering
         /// </summary>
         private void DisposeBatchedRenderer()
         {
+            _isBatchedRendererSuspended = false;
+
             if (BatchedRenderer != null)
             {
                 // Keep per-drawable renderers consistent in case the model comes back

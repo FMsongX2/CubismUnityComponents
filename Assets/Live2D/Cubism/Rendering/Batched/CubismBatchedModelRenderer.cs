@@ -1465,6 +1465,80 @@ namespace Live2D.Cubism.Rendering
         #region Disposal
 
         /// <summary>
+        /// Refreshes all dynamic state from the model after the controller was
+        /// disabled and re-enabled (e.g. avatar power management toggling the
+        /// render controller on screen changes). Keeps the expensive GPU/native
+        /// resources alive so the resume is stutter-free; only CPU-side state and
+        /// the next frame's uploads are refreshed. The core does not run while the
+        /// controller is disabled in the supported flows, but dirty flags emitted
+        /// during the gap are lost, so everything is re-read defensively.
+        /// </summary>
+        /// <returns>False when the renderer no longer matches the model and must be rebuilt.</returns>
+        public bool ResumeAfterDisable()
+        {
+            if (!IsValid)
+            {
+                return false;
+            }
+
+            var model = _controller.Model;
+
+            if (model == null
+                || model.Drawables == null
+                || model.Drawables.Length != _drawableCount)
+            {
+                return false;
+            }
+
+            var drawables = model.Drawables;
+            var renderOrders = model.AllDrawObjectsRenderOrder;
+
+            for (var i = 0; i < drawables.Length; i++)
+            {
+                var drawable = drawables[i];
+                var unmanagedIndex = drawable.UnmanagedIndex;
+
+                if (unmanagedIndex < 0 || unmanagedIndex >= _drawableCount)
+                {
+                    return false;
+                }
+
+                // Current pose (the core may have been updated while unsubscribed).
+                var positions = drawable.VertexPositions;
+                var baseVertex = _vertexBase[unmanagedIndex];
+                var count = Mathf.Min(_vertexCount[unmanagedIndex], positions != null ? positions.Length : 0);
+
+                for (var v = 0; v < count; v++)
+                {
+                    var position = _positions[baseVertex + v];
+                    position.x = positions[v].x;
+                    position.y = positions[v].y;
+                    _positions[baseVertex + v] = position;
+                }
+
+                _renderOrders[unmanagedIndex] = renderOrders[unmanagedIndex];
+
+                RecomputeColorRow(unmanagedIndex);
+            }
+
+            RebuildOrder();
+
+            if (_controller.SortingMode == CubismSortingMode.BackToFrontZ)
+            {
+                RefreshSortZ(_controller.DepthOffset);
+            }
+
+            _positionsDirty = true;
+            _stream1Dirty = true;
+            _indicesDirty = true;
+            _lastFlushedFrame = -1;
+            _lastMaskUpdateFrame = -1;
+
+            return true;
+        }
+
+
+        /// <summary>
         /// Pushes the batched path's dynamic state (visibility, render orders) back
         /// onto the per-drawable renderers. Call before falling back to the legacy
         /// path at runtime; the legacy event flow only propagates dirty changes, so
