@@ -1082,26 +1082,37 @@ namespace Live2D.Cubism.Rendering
                     }
                 }
 
-                if (fullRefresh || drawableData.IsVisibilityDirty)
+                // Visibility is consumed value-driven, not flag-driven: IsVisible is an
+                // absolute per-update snapshot, and relying on the one-shot
+                // VisibilityDidChange flag latches a stale state forever if a single
+                // event is missed (e.g. raised while the controller was disabled and
+                // unsubscribed) — a pose-hidden arm then never comes back. The legacy
+                // path re-derives its skip state from current values every frame;
+                // mirror that robustness. The compare keeps the rebuild cost gated.
                 {
                     var isVisible = drawableData.IsVisible;
+                    var visibleChanged = _visible[i] != isVisible;
 
-                    if (_visible[i] != isVisible)
+                    if (visibleChanged)
                     {
                         _visible[i] = isVisible;
                         visibilityDirty = true;
                     }
 
-                    // Keep the (mesh-less) MeshRenderer's enabled flag in sync;
-                    // raycasting and user code use it as the visibility signal.
-                    var renderer = _renderersByDrawable[i];
-                    if (renderer != null && renderer.MeshRenderer.enabled != isVisible)
+                    if (visibleChanged || fullRefresh)
                     {
-                        renderer.MeshRenderer.enabled = isVisible;
+                        // Keep the (mesh-less) MeshRenderer's enabled flag in sync;
+                        // raycasting and user code use it as the visibility signal.
+                        var renderer = _renderersByDrawable[i];
+                        if (renderer != null && renderer.MeshRenderer.enabled != isVisible)
+                        {
+                            renderer.MeshRenderer.enabled = isVisible;
+                        }
                     }
                 }
 
-                if (fullRefresh || drawableData.IsOpacityDirty)
+                // Opacity gets the same value-driven fallback for the same reason.
+                if (fullRefresh || drawableData.IsOpacityDirty || _opacities[i] != drawableData.Opacity)
                 {
                     _opacities[i] = drawableData.Opacity;
 
@@ -1669,6 +1680,11 @@ namespace Live2D.Cubism.Rendering
             _indicesDirty = true;
             _lastFlushedFrame = -1;
             _lastMaskUpdateFrame = -1;
+
+            // Dirty events raised while disabled (unsubscribed) are gone for good;
+            // treat the first event after resume as a full refresh so visibility,
+            // opacity, and order resync from their absolute snapshot values.
+            _receivedFirstData = false;
 
             // The texture array is a detached GPU copy Unity cannot restore on its
             // own; repopulate it in case its contents were discarded while hidden.
