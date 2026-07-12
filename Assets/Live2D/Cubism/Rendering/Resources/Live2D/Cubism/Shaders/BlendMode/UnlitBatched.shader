@@ -16,6 +16,13 @@ Shader "Live2D Cubism/Batched"
     Properties
     {
         [PerRendererData] _MainTex ("Texture", 2D) = "white" {}
+        // Declared so the runtime array binding is a first-class tracked property.
+        // An undeclared texture property survives only in the material's transient
+        // sheet: editor events that rebuild the sheet (window occlusion/focus
+        // cycles, shader reload, graphics device events) drop it, the shader then
+        // samples an unbound array, and the model renders as a flat gray
+        // silhouette. Declaring it also makes the binding readable for diagnosis.
+        [HideInInspector] _MainTexArray ("Texture Array", 2DArray) = "" {}
         [PerRendererData] cubism_ModelOpacity ("Model Opacity", Float) = 1
 
         [PerRendererData] cubism_MaskTexture ("cubism_Internal", 2D) = "white" {}
