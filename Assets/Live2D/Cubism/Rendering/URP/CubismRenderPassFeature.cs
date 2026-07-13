@@ -750,6 +750,29 @@ namespace Live2D.Cubism.Rendering.URP
             }
 
             /// <summary>
+            /// Composites the common rendering texture onto the camera target.
+            /// </summary>
+            /// <param name="data">Pass data providing the texture handles.</param>
+            /// <param name="clearCommonAfter">True to clear the common texture afterwards (per-group compositing).</param>
+            private static void BlitCommonToCameraTarget(PassData data, bool clearCommonAfter)
+            {
+                _commandBuffer.SetRenderTarget(data.CameraTextureHandle, data.CameraDepthTextureHandle);
+
+                _blitRenderTextureMaterial.SetTexture(CubismShaderVariables.MainTexture, data.CommonRenderingTextureHandle);
+
+                var reversedZ = SystemInfo.usesReversedZBuffer ? GEqual : LEqual;
+                _blitRenderTextureMaterial.SetInt(CubismShaderVariables.ReversedZ, reversedZ);
+
+                _commandBuffer.DrawMesh(_blitRenderTextureMesh, Matrix4x4.identity, _blitRenderTextureMaterial);
+
+                if (clearCommonAfter)
+                {
+                    _commandBuffer.SetRenderTarget(data.CommonRenderingTextureHandle);
+                    _commandBuffer.ClearRenderTarget(true, true, Color.clear);
+                }
+            }
+
+            /// <summary>
             /// Draws the objects using the provided command buffer and pass data.
             /// </summary>
             /// <param name="commandBuffer">Command buffer to record draw commands.</param>
@@ -949,6 +972,41 @@ namespace Live2D.Cubism.Rendering.URP
                     _commandBuffer.Blit(data.CameraTextureHandle, data.CommonRenderingTextureHandle);
                 }
 #endif
+
+                // Every model batched, buffered composition: draw straight from the
+                // live controller groups, mirroring the direct path's early-out. The
+                // legacy bookkeeping below — SortingRendererGroups, CheckRenderingSkip,
+                // the per-controller flag resets — exists solely to feed the
+                // per-renderer fallback loop and costs thousands of per-drawable
+                // native calls per frame; none of it is consumed when every group
+                // takes the batched path.
+                if (data.AllControllersBatched)
+                {
+                    _commandBuffer.SetRenderTarget(data.CommonRenderingTextureHandle, data.CameraDepthTextureHandle);
+                    _commandBuffer.ClearRenderTarget(false, true, Color.clear);
+
+                    var groups = data.RenderControllerGroupDaraArray;
+                    var copyPerGroup = CubismRenderControllerGroup.GetInstance().IsCopiedToCameraTexture;
+
+                    for (var groupIndex = 0; groupIndex < groups?.Length; groupIndex++)
+                    {
+                        DrawGroupBatched(_commandBuffer, data, groups[groupIndex].Controllers, false);
+
+                        if (copyPerGroup)
+                        {
+                            BlitCommonToCameraTarget(data, true);
+                        }
+                    }
+
+                    if (!copyPerGroup)
+                    {
+                        // The common texture is a per-frame transient; no trailing
+                        // clear is needed after the final composite.
+                        BlitCommonToCameraTarget(data, false);
+                    }
+
+                    return;
+                }
 
                 // Sort the renderers by their sorting order.
                 SortingRendererGroups(data);
