@@ -2,12 +2,7 @@
 
 ---
 
-> ### 📱 Mobile-tuned fork
-> A fork of **[Live2D/CubismUnityComponents](https://github.com/Live2D/CubismUnityComponents)**, optimized for mobile.
-> - **Correctness fixes** are submitted upstream as individual pull requests.
-> - **Performance optimizations** are applied here on the `mobile` branch — our working SDK.
->
-> For official releases and documentation, see the upstream project.
+> Fork of [Live2D/CubismUnityComponents](https://github.com/Live2D/CubismUnityComponents), optimized for mobile.
 
 ---
 
